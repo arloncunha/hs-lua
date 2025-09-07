@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+#
+# hs-lua - A Hammerspoon Lua Runtime Wrapper
+# ========================================
+#
+# Description:
+#     A command-line wrapper that allows running Lua code and files within
+#     the Hammerspoon runtime environment. Provides three modes of operation:
+#     interactive REPL, inline code execution, and script file execution.
+#
+# Usage:
+#     hs-lua                    -> Start interactive REPL
+#     hs-lua -e 'code' -- a b c -> Execute inline code with arguments
+#     hs-lua script.lua a b c   -> Run script file with arguments
+#     hs-lua -h, --help         -> Show help message
+#     hs-lua -v, --version      -> Show version information
+#
+# Features:
+#     - Preserves current working directory
+#     - Passes command line arguments to Lua scripts
+#     - JSON-safe argument handling
+#     - Version information display
+#
+# Author: hs-lua project
+# Date: 2025
+#
+
+set -euo pipefail
+
+# --- Installation Check ---------------------------------------------------
+
+#
+# check_hammerspoon() - Verify Hammerspoon is installed and accessible
+#
+# Description:
+#     Checks if the 'hs' command is available and can execute basic commands.
+#     Provides helpful error messages and installation guidance if not found.
+#
+# Exit codes:
+#     0 - Hammerspoon is installed and working
+#     1 - Hammerspoon not found or not working
+#
+check_hammerspoon() {
+  # Check if 'hs' command exists
+  if ! command -v hs >/dev/null 2>&1; then
+    cat >&2 << 'EOF'
+Error: Hammerspoon not found
+
+hs-lua requires Hammerspoon to be installed and the 'hs' command to be available.
+Please install Hammerspoon from: https://www.hammerspoon.org/'
+EOF
+    return 1
+  fi
+
+  # Test if Hammerspoon can execute basic commands
+  if ! hs -c 'print("test")' >/dev/null 2>&1; then
+    cat >&2 << 'EOF'
+Error: Hammerspoon not responding
+
+The 'hs' command was found but cannot execute properly.
+
+Common fixes:
+1. Start the Hammerspoon application (should appear in menu bar)
+2. Check if Hammerspoon has required permissions in System Preferences
+3. Try restarting Hammerspoon
+
+Verify with: hs -c 'print("Hammerspoon is working")'
+EOF
+    return 1
+  fi
+
+  return 0
+}
+
+# --- Helper Functions -----------------------------------------------------
+
+#
+# json_escape() - Escape a string for safe JSON inclusion
+#
+# Description:
+#     Converts a single string argument into a properly escaped JSON string
+#     literal by escaping backslashes and double quotes.
+#
+# Parameters:
+#     $1 - The string to escape
+#
+# Output:
+#     A JSON-safe string literal enclosed in double quotes
+#
+json_escape() {
+  local s="$1"
+  # Escape backslashes first, then double quotes
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '"%s"' "$s"
+}
+
+#
+# build_json_array() - Convert shell arguments to JSON array
+#
+# Description:
+#     Takes multiple string arguments and constructs a valid JSON array
+#     with properly escaped string elements. Returns empty array if no
+#     arguments provided.
+#
+# Parameters:
+#     $@ - Variable number of string arguments
+#
+# Output:
+#     A valid JSON array string (e.g., ["arg1", "arg2", "arg3"])
+#
+build_json_array() {
+  if [ "$#" -eq 0 ]; then echo "[]"; return; fi
+  local out="[" first=1
+  for a in "$@"; do
+    if [ $first -eq 1 ]; then first=0; else out+=", "; fi
+    out+="$(json_escape "$a")"
+  done
+  out+="]"
+  echo "$out"
+}
+
+#
+# abs_path() - Convert relative path to absolute path
+#
+# Description:
+#     Converts a given path to an absolute path without resolving symlinks.
+#     If the path is already absolute (starts with /), returns it unchanged.
+#     Otherwise, prepends the current working directory.
+#
+# Parameters:
+#     $1 - The path to convert (relative or absolute)
+#
+# Output:
+#     An absolute path string
+#
+abs_path() {
+  case "$1" in
+    /*) printf "%s\n" "$1" ;;
+    *)  printf "%s/%s\n" "$PWD" "$1" ;;
+  esac
+}
+
+# --- Execution Modes -----------------------------------------------------
+
+# Check Hammerspoon installation before proceeding (skip for help flag)
+if [ "${1:-}" != "-h" ] && [ "${1:-}" != "--help" ]; then
+  check_hammerspoon || exit 1
+fi
+
+#
+# Handle help flag
+#
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat << 'EOF'
+hs-lua - Hammerspoon Lua Runtime Wrapper
+
+DESCRIPTION:
+    A command-line wrapper that allows running Lua code and files within
+    the Hammerspoon runtime environment.
+
+USAGE:
+    hs-lua                    Start interactive REPL
+    hs-lua -e 'code' -- args  Execute inline code with arguments
+    hs-lua script.lua args    Run script file with arguments
+    hs-lua -h, --help         Show this help message
+    hs-lua -v, --version      Show version information
+
+EXAMPLES:
+    hs-lua
+        Start interactive Hammerspoon REPL
+
+    hs-lua -e 'print("Hello, World!")'
+        Execute inline Lua code
+
+    hs-lua -e 'print("Args:", table.concat(arg, ", "))' -- foo bar
+        Execute code with arguments
+
+    hs-lua hello.lua arg1 arg2
+        Run script file with arguments
+
+FEATURES:
+    - Preserves current working directory
+    - Passes command line arguments to Lua scripts
+    - JSON-safe argument handling
+    - Interactive REPL mode
+    - Inline code execution
+
+For more information about Hammerspoon, visit: https://www.hammerspoon.org/
+EOF
+  exit 0
+fi
+
+#
+# Handle version flag
+#
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  echo "-----------------------------------------"
+  echo "hs-lua: a Hammerspoon Lua runtime wrapper"
+  echo "-----------------------------------------"
+  hs -c 'print("Hammerspoon version: " .. hs.processInfo.version); print("Lua version: " .. _VERSION)'
+  exit 0
+fi
+
+#
+# Mode 1: Interactive REPL
+# No arguments provided - start interactive Hammerspoon session
+#
+if [ "$#" -eq 0 ]; then
+  # Display version information like other REPL languages, then start interactive mode
+  echo ""
+  hs -c 'print("HS Lua REPL - ".. "Hammerspoon: " .. hs.processInfo.version .. " " .. _VERSION)'
+  exec hs
+fi
+
+#
+# Mode 2: Inline Code Execution
+# -e flag provided - execute code string with optional arguments
+#
+if [ "${1:-}" = "-e" ]; then
+  shift
+  # Ensure code string is provided after -e flag
+  [ $# -ge 1 ] || { echo "hs-lua: missing code after -e" >&2; exit 2; }
+  CODE="$1"; shift
+  
+  # Parse arguments: everything after -- separator becomes script arguments
+  ARGS=()
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "--" ]; then
+      shift
+      ARGS+=("$@")
+      break
+    fi
+    shift
+  done
+  
+  # Convert arguments to JSON array for safe passing to Lua
+  HS_ARGS_JSON="$(build_json_array ${ARGS[@]+"${ARGS[@]}"})"
+  
+  # Create staging Lua code: set up arg[] global, then execute user code
+  STAGER="local json=require(\"hs.json\"); _G.arg=json.decode('$HS_ARGS_JSON') or {};
+           local f,err=load('$CODE', \"hs-lua -e\", \"t\", _G);
+           if not f then error(err) end; return f()"
+  exec hs -c "$STAGER"
+fi
+
+#
+# Mode 3: Script File Execution
+# First argument is treated as Lua script file, remaining args passed to script
+#
+SCRIPT_ABS="$(abs_path "$1")"; shift
+export HS_SCRIPT="$SCRIPT_ABS"
+export HS_CWD="$PWD"
+export HS_ARGS="$(build_json_array "$@")"
+
+# Create staging Lua code that:
+# 1. Changes back to the shell's working directory
+# 2. Sets up the global arg[] array with command line arguments
+# 3. Executes the target script file
+STAGER="local json=require(\"hs.json\"); local fs=require(\"hs.fs\");
+        fs.chdir(\"$PWD\")
+        _G.arg=json.decode('$HS_ARGS') or {}
+        dofile('$SCRIPT_ABS')"
+
+exec hs -c "$STAGER"
